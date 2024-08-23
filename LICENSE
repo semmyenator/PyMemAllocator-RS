@@ -1,1 +1,15 @@
-All code script is licensed under the MPL 2.0, GPLv3, and LGPLv3 licenses.
+Flexible and Protective Open Source Licensing Proposal
+
+We propose a less restrictive copyright license that encourages the use of open source components in commercial and proprietary software. Our license will allow users, developers, and distributors of software to use and modify the code according to their needs and preferences, with the flexibility to choose the license terms that best suit their situation.
+
+One of the key features of our license is that it allows for the mixing of license-based code with code under a different license, as long as certain requirements are met. These requirements include retaining copyright information and license text. This provides flexibility for developers who want to incorporate open source components into their projects without being restricted by incompatible licenses.
+
+Our license also includes patent protection for source code. If a contributor includes patent-protected code, they agree not to file patent infringement lawsuits against those who use the code. This ensures that our licensees can use any patent-protected technology without fear of legal repercussions.
+
+In addition, our license requires that any code based on our license must also be licensed when distributed. This is often referred to as a "viral" or "contagious" license, as it ensures that modifications or derivative works based on the original code are also released under the same license terms. This promotes the sharing and collaboration that is fundamental to the open source community.
+
+To further encourage collaboration, we have added patent considerations to our license. Licensees are required to provide permission to use any patent-protected technology, ensuring that all contributors have the necessary rights to use and modify the code.
+
+Finally, our license includes a variant specifically designed for libraries. This variant allows libraries to be linked into non-free programs under more relaxed conditions. As long as the requirements are met, such as providing modified library source code, developers can use the licensed library with proprietary software without subjecting the entire project to our license. This encourages library developers to share their improvements with end product developers, fostering a more open and collaborative ecosystem.
+
+We believe that our proposed open source license strikes a balance between flexibility and protection, encouraging the use and contribution to open source software while also ensuring that contributors' rights are respected and protected.
