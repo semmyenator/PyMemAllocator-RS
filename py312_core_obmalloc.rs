@@ -1,17 +1,18 @@
-// Import necessary standard libraries
-use std::os::raw::{c_int, c_uint, c_void}; // For C language integer types
-use std::ptr; // For pointer operations
-use std::sync::Arc; // For atomic reference counting
+use std::os::raw::{c_uint}; // Keep only used c_uint
+use std::sync::{Arc, Mutex}; // For atomic reference counting and mutexes
+use std::alloc::{GlobalAlloc, Layout, System}; // For custom memory allocation
+use std::boxed::Box; // For memory safety with Box
+use std::mem::ManuallyDrop; // For wrapping non-Copy types in a union
 
 // Memory pool header structure, containing all information needed to manage the memory pool
 #[repr(C)]
 pub struct PoolHeader {
-    pub ref_: PoolHeaderRef, // Reference count or padding for managing memory pool references
-    pub freeblock: *mut u8, // Pointer to free memory block
-    pub nextpool: *mut PoolHeader, // Pointer to the next memory pool
-    pub prevpool: *mut PoolHeader, // Pointer to the previous memory pool
+    pub ref_: PoolHeaderRef, // Use smart pointers for safe memory management
+    pub freeblock: *mut u8,  // Pointer to free memory block
+    pub nextpool: Option<Box<PoolHeader>>, // Use Box to handle memory automatically
+    pub prevpool: Option<Box<PoolHeader>>, // Use Box for previous pool reference
     pub arenaindex: c_uint, // Index of the memory pool in the Arena
-    pub szidx: c_uint, // Corresponding memory size index
+    pub szidx: c_uint,      // Corresponding memory size index
     pub nextoffset: c_uint, // Next available offset
     pub maxnextoffset: c_uint, // Maximum available offset
 }
@@ -19,127 +20,83 @@ pub struct PoolHeader {
 // Reference counting union, providing counting functionality
 #[repr(C)]
 pub union PoolHeaderRef {
-    pub _padding: *mut u8, // Padding pointer, placeholder when unused
-    pub count: c_uint, // Count, indicates the number of references to this memory pool
+    pub ref_count: ManuallyDrop<Arc<Mutex<u32>>>, // Atomic reference counting with Mutex for thread safety
+    pub _padding: *mut u8, // Padding if needed
 }
 
-// Arena object structure, managing a group of memory pools
-#[repr(C)]
-pub struct ArenaObject {
-    pub address: usize, // Address of the Arena
-    pub pool_address: *mut u8, // Pointer to the pools in this Arena
-    pub nfreepools: c_uint, // Number of free pools
-    pub ntotalpools: c_uint, // Total number of pools
-    pub freepools: *mut PoolHeader, // Pointer to free pools
-    pub nextarena: *mut ArenaObject, // Pointer to the next Arena
-    pub prevarena: *mut ArenaObject, // Pointer to the previous Arena
-}
+// Implement custom memory allocation using Rust's std::alloc module
+struct CustomAllocator;
 
-// External C functions declaration for memory management
-extern "C" {
-    pub fn _PyObject_VirtualAlloc(size: usize) -> *mut c_void; // Virtual memory allocation
-    pub fn _PyObject_VirtualFree(ptr: *mut c_void, size: usize); // Virtual memory free
-    pub fn _Py_GetGlobalAllocatedBlocks() -> isize; // Get global allocated blocks
-    pub fn _PyInterpreterState_GetAllocatedBlocks(interp: *mut c_void) -> isize; // Get allocated blocks for the interpreter
-    pub fn _PyInterpreterState_FinalizeAllocatedBlocks(interp: *mut c_void); // Finalize allocated blocks
-    pub fn _PyMem_init_obmalloc(interp: *mut c_void) -> c_int; // Initialize obmalloc
-    pub fn _PyMem_obmalloc_state_on_heap(interp: *mut c_void) -> bool; // Check obmalloc state
-}
-
-// Memory allocator structure, interacting with the Python interpreter
-pub struct PyMemAllocator {
-    interp: *mut c_void, // Pointer to the Python interpreter
-}
-
-// Implementing methods for memory allocator
-impl PyMemAllocator {
-    // Constructor to initialize memory allocator
-    pub fn new(interp: *mut c_void) -> Self {
-        PyMemAllocator { interp }
+unsafe impl GlobalAlloc for CustomAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        System.alloc(layout) // Use system allocator by default
     }
 
-    // Initialize obmalloc memory allocation system
-    pub fn init_obmalloc(&mut self) {
-        unsafe {
-            _PyMem_init_obmalloc(self.interp); // Call C function to initialize
-        }
-    }
-
-    // Check if obmalloc state is on heap
-    pub fn is_obmalloc_state_on_heap(&self) -> bool {
-        unsafe {
-            _PyMem_obmalloc_state_on_heap(self.interp) // Call C function to check state
-        }
-    }
-
-    // Get global allocated blocks
-    pub fn get_allocated_blocks(&self) -> isize {
-        unsafe {
-            _Py_GetGlobalAllocatedBlocks() // Call C function to get global allocated blocks
-        }
-    }
-
-    // Get interpreter allocated blocks
-    pub fn get_interpreter_allocated_blocks(&self) -> isize {
-        unsafe {
-            _PyInterpreterState_GetAllocatedBlocks(self.interp) // Call C function to get allocated blocks for the interpreter
-        }
-    }
-
-    // Finalize allocated blocks, releasing resources
-    pub fn finalize_allocated_blocks(&mut self) {
-        unsafe {
-            _PyInterpreterState_FinalizeAllocatedBlocks(self.interp); // Call C function to release resources
-        }
-    }
-
-    // Virtual memory allocation, allocating memory based on size
-    pub fn virtual_alloc(&self, size: usize) -> *mut c_void {
-        unsafe { _PyObject_VirtualAlloc(size) } // Call C function to allocate memory
-    }
-
-    // Virtual memory free, releasing specified memory
-    pub fn virtual_free(&self, ptr: *mut c_void, size: usize) {
-        unsafe { _PyObject_VirtualFree(ptr, size) } // Call C function to free memory
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout) // Deallocate memory using system allocator
     }
 }
 
-// Implementing methods for Arena object
-impl ArenaObject {
-    // Constructor to initialize Arena object
-    pub fn new() -> Self {
-        ArenaObject {
-            address: 0, // Initialize address to 0
-            pool_address: ptr::null_mut(), // Initialize to null pointer
-            nfreepools: 0, // Initialize free pool count to 0
-            ntotalpools: 0, // Initialize total pool count to 0
-            freepools: ptr::null_mut(), // Initialize free pool pointer to null
-            nextarena: ptr::null_mut(), // Initialize to null pointer
-            prevarena: ptr::null_mut(), // Initialize to null pointer
+// Use Result and Option types for error handling
+#[allow(dead_code)]
+fn allocate_pool(size: usize) -> Result<*mut u8, &'static str> {
+    let layout = Layout::from_size_align(size, 8).map_err(|_| "Invalid memory layout")?;
+    unsafe {
+        let ptr = System.alloc(layout);
+        if ptr.is_null() {
+            Err("Memory allocation failed")
+        } else {
+            Ok(ptr)
         }
     }
+}
 
-    // Allocate a new pool, returning the pool pointer
-    pub fn allocate_pool(&mut self) -> *mut PoolHeader {
-        let pool = Box::into_raw(Box::new(PoolHeader {
-            ref_: PoolHeaderRef { _padding: ptr::null_mut() }, // Initialize reference
-            freeblock: ptr::null_mut(), // Initialize free block pointer to null
-            nextpool: ptr::null_mut(), // Initialize to null pointer
-            prevpool: ptr::null_mut(), // Initialize to null pointer
-            arenaindex: 0, // Initialize Arena index to 0
-            szidx: 0, // Initialize size index to 0
-            nextoffset: 0, // Initialize next offset to 0
-            maxnextoffset: 0, // Initialize maximum offset to 0
-        }));
-        self.freepools = pool; // Update free pools pointer
-        pool // Return newly allocated pool pointer
+// Example function demonstrating ownership, thread safety, and safe memory management
+#[allow(dead_code)]
+fn manage_memory_pools() -> Result<(), &'static str> {
+    let pool_header = PoolHeader {
+        ref_: PoolHeaderRef {
+            ref_count: ManuallyDrop::new(Arc::new(Mutex::new(1))), // Initialize reference count with Arc + Mutex
+        },
+        freeblock: allocate_pool(1024)?, // Allocate memory safely using custom allocator
+        nextpool: None, // Initialize with no next pool
+        prevpool: None, // Initialize with no previous pool
+        arenaindex: 0,  // Set arena index
+        szidx: 0,       // Set memory size index
+        nextoffset: 0,  // Start with no offset
+        maxnextoffset: 1024, // Maximum offset set to memory pool size
+    };
+
+    // Accessing union field safely using an unsafe block
+    unsafe {
+        let mut ref_lock = pool_header.ref_.ref_count.lock().map_err(|_| "Mutex lock failed")?;
+        *ref_lock += 1; // Increment reference count in a thread-safe manner
+        println!("Memory pool successfully managed with reference count: {}", *ref_lock);
     }
 
-    // Free a pool, releasing memory
-    pub fn free_pool(&mut self, pool: *mut PoolHeader) {
-        unsafe {
-            Box::from_raw(pool); // Release the pool back to memory
-        }
-        self.nfreepools += 1; // Update the count of free pools
+    Ok(())
+}
+
+// Demonstrating the custom memory allocator
+#[global_allocator]
+static A: CustomAllocator = CustomAllocator;
+
+#[allow(dead_code)]
+fn main() -> Result<(), &'static str> {
+    // Call memory pool management function in the main program
+    manage_memory_pools()?;
+    println!("Program completed successfully.");
+    Ok(())
+}
+
+// Test module
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_pools() {
+        let result = manage_memory_pools();
+        assert!(result.is_ok());
     }
 }
