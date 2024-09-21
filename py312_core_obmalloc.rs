@@ -4,42 +4,41 @@ use std::alloc::{GlobalAlloc, Layout, System}; // For custom memory allocation
 use std::boxed::Box; // For memory safety with Box
 use std::mem::ManuallyDrop; // For wrapping non-Copy types in a union
 
-// Memory pool header structure, containing all information needed to manage the memory pool
+// Memory pool header structure
 #[repr(C)]
 pub struct PoolHeader {
-    pub ref_: PoolHeaderRef, // Use smart pointers for safe memory management
-    pub freeblock: *mut u8,  // Pointer to free memory block
-    pub nextpool: Option<Box<PoolHeader>>, // Use Box to handle memory automatically
-    pub prevpool: Option<Box<PoolHeader>>, // Use Box for previous pool reference
-    pub arenaindex: c_uint, // Index of the memory pool in the Arena
-    pub szidx: c_uint,      // Corresponding memory size index
-    pub nextoffset: c_uint, // Next available offset
-    pub maxnextoffset: c_uint, // Maximum available offset
+    pub ref_: PoolHeaderRef,
+    pub freeblock: *mut u8,
+    pub nextpool: Option<Box<PoolHeader>>,
+    pub prevpool: Option<Box<PoolHeader>>,
+    pub arenaindex: c_uint,
+    pub szidx: c_uint,
+    pub nextoffset: c_uint,
+    pub maxnextoffset: c_uint,
 }
 
-// Reference counting union, providing counting functionality
+// Reference counting union
 #[repr(C)]
 pub union PoolHeaderRef {
-    pub ref_count: ManuallyDrop<Arc<Mutex<u32>>>, // Atomic reference counting with Mutex for thread safety
-    pub _padding: *mut u8, // Padding if needed
+    pub ref_count: ManuallyDrop<Arc<Mutex<u32>>>,
+    pub _padding: *mut u8,
 }
 
-// Implement custom memory allocation using Rust's std::alloc module
+// Custom memory allocator
 struct CustomAllocator;
 
 unsafe impl GlobalAlloc for CustomAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        System.alloc(layout) // Use system allocator by default
+        System.alloc(layout)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        System.dealloc(ptr, layout) // Deallocate memory using system allocator
+        System.dealloc(ptr, layout)
     }
 }
 
-// Use Result and Option types for error handling
-#[allow(dead_code)]
-fn allocate_pool(size: usize) -> Result<*mut u8, &'static str> {
+// Memory allocation function
+pub fn allocate_pool(size: usize) -> Result<*mut u8, &'static str> {
     let layout = Layout::from_size_align(size, 8).map_err(|_| "Invalid memory layout")?;
     unsafe {
         let ptr = System.alloc(layout);
@@ -51,42 +50,41 @@ fn allocate_pool(size: usize) -> Result<*mut u8, &'static str> {
     }
 }
 
-// Example function demonstrating ownership, thread safety, and safe memory management
-#[allow(dead_code)]
-fn manage_memory_pools() -> Result<(), &'static str> {
+// Memory management function
+pub fn manage_memory_pools() -> Result<(), &'static str> {
     let pool_header = PoolHeader {
         ref_: PoolHeaderRef {
-            ref_count: ManuallyDrop::new(Arc::new(Mutex::new(1))), // Initialize reference count with Arc + Mutex
+            ref_count: ManuallyDrop::new(Arc::new(Mutex::new(1))),
         },
-        freeblock: allocate_pool(1024)?, // Allocate memory safely using custom allocator
-        nextpool: None, // Initialize with no next pool
-        prevpool: None, // Initialize with no previous pool
-        arenaindex: 0,  // Set arena index
-        szidx: 0,       // Set memory size index
-        nextoffset: 0,  // Start with no offset
-        maxnextoffset: 1024, // Maximum offset set to memory pool size
+        freeblock: allocate_pool(1024)?,
+        nextpool: None,
+        prevpool: None,
+        arenaindex: 0,
+        szidx: 0,
+        nextoffset: 0,
+        maxnextoffset: 1024,
     };
 
-    // Accessing union field safely using an unsafe block
     unsafe {
         let mut ref_lock = pool_header.ref_.ref_count.lock().map_err(|_| "Mutex lock failed")?;
-        *ref_lock += 1; // Increment reference count in a thread-safe manner
+        *ref_lock += 1;
         println!("Memory pool successfully managed with reference count: {}", *ref_lock);
     }
 
     Ok(())
 }
 
-// Demonstrating the custom memory allocator
+// Custom memory allocator
 #[global_allocator]
 static A: CustomAllocator = CustomAllocator;
 
-#[allow(dead_code)]
-fn main() -> Result<(), &'static str> {
-    // Call memory pool management function in the main program
-    manage_memory_pools()?;
-    println!("Program completed successfully.");
-    Ok(())
+// Main function
+#[cfg(test)]
+fn main() {
+    let _ = std::panic::catch_unwind(|| {
+        manage_memory_pools().unwrap();
+        println!("Program completed successfully.");
+    });
 }
 
 // Test module
